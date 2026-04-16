@@ -11,6 +11,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 let currentQR = null;
 let isConnected = false;
+let isSyncing = false;
 
 // Cliente WhatsApp
 const client = new Client({
@@ -28,23 +29,32 @@ client.on('qr', async qr => {
     currentQR = await QRCode.toDataURL(qr);
 });
 
+// Autenticado (QR escaneado, sincronizando chats)
+client.on('authenticated', () => {
+    console.log('WhatsApp autenticado, sincronizando...');
+    isSyncing = true;
+    currentQR = null;
+});
+
 // Pronto
 client.on('ready', () => {
     console.log('WhatsApp conectado!');
     isConnected = true;
+    isSyncing = false;
     currentQR = null;
 });
 
 client.on('disconnected', () => {
     console.log('WhatsApp desconectado');
     isConnected = false;
+    isSyncing = false;
 });
 
 client.initialize();
 
 // Status endpoint
 app.get('/status', (req, res) => {
-    res.json({ connected: isConnected, qr: currentQR });
+    res.json({ connected: isConnected, qr: currentQR, syncing: isSyncing });
 });
 
 // Listar todos os grupos
@@ -66,8 +76,14 @@ app.post('/send', async (req, res) => {
     const bodyPath = path.join(__dirname, 'body.json');
     fs.writeFileSync(bodyPath, JSON.stringify({ grupos, mensagem }, null, 2));
 
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
     try {
         const chats = await client.getChats();
+        const total = grupos.length;
+        let enviados = 0;
 
         for (let nome of grupos) {
             const nomeNorm = nome.trim().normalize('NFC').toLowerCase();
@@ -77,18 +93,22 @@ app.post('/send', async (req, res) => {
                 const delay = Math.floor(Math.random() * 4000) + 1000;
                 await new Promise(resolve => setTimeout(resolve, delay));
                 await client.sendMessage(chat.id._serialized, mensagem);
+                enviados++;
                 console.log(`Enviado para ${chat.name} (espera: ${delay}ms)`);
+                res.write(`data: ${JSON.stringify({ current: enviados, total, grupo: chat.name })}\n\n`);
             } else {
+                enviados++;
                 console.log(`Grupo não encontrado: ${nome}`);
-                const gruposDisponiveis = chats.filter(c => c.isGroup).map(c => c.name);
-                console.log('Grupos disponíveis:', gruposDisponiveis);
+                res.write(`data: ${JSON.stringify({ current: enviados, total, grupo: nome, erro: 'Grupo não encontrado' })}\n\n`);
             }
         }
 
-        res.json({ status: 'Mensagens enviadas' });
+        res.write(`data: ${JSON.stringify({ done: true, enviados, total })}\n\n`);
+        res.end();
 
     } catch (err) {
-        res.status(500).json({ erro: err.toString() });
+        res.write(`data: ${JSON.stringify({ error: err.toString() })}\n\n`);
+        res.end();
     }
 });
 

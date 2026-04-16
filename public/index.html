@@ -175,6 +175,74 @@
             border: 1px solid #ff4444;
             display: block;
         }
+
+        /* ===== TELA SINCRONIZANDO ===== */
+        #sync-screen {
+            display: none;
+            text-align: center;
+        }
+
+        #sync-screen h1 {
+            font-size: 1.4rem;
+            margin-bottom: 8px;
+            color: #25d366;
+        }
+
+        #sync-screen p {
+            font-size: 0.85rem;
+            color: #8696a0;
+            margin-bottom: 24px;
+        }
+
+        .sync-spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid #2a3942;
+            border-top: 4px solid #25d366;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .sync-tip {
+            font-size: 0.75rem;
+            color: #667781;
+            margin-top: 16px;
+            line-height: 1.5;
+        }
+
+        /* ===== PROGRESSO ENVIO ===== */
+        #progress-bar {
+            display: none;
+            margin-top: 16px;
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 8px;
+            background: #2a3942;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #25d366;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-text {
+            font-size: 0.8rem;
+            color: #8696a0;
+            margin-top: 6px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -188,6 +256,15 @@
                 <img id="qr-img" src="" alt="QR Code" style="display:none;">
             </div>
             <p class="status-text" id="status-text">Conectando...</p>
+        </div>
+
+        <!-- TELA SINCRONIZANDO -->
+        <div id="sync-screen">
+            <h1>Sincronizando</h1>
+            <p>WhatsApp autenticado! Carregando seus chats...</p>
+            <div class="sync-spinner"></div>
+            <p class="status-text">Isso pode demorar alguns minutos na primeira vez</p>
+            <p class="sync-tip">Contas com muitas conversas podem levar até 20 minutos.<br>Não feche esta página.</p>
         </div>
 
         <!-- TELA ENVIO -->
@@ -208,6 +285,14 @@
 
             <button class="btn-send" id="btn-send" onclick="enviar()">Enviar</button>
             <button class="btn-send" id="btn-groups" onclick="listarGrupos()" style="margin-top:10px; background:#2a3942; color:#e9edef;">Listar Grupos (baixar .txt)</button>
+
+            <div id="progress-bar">
+                <div class="progress-track">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <p class="progress-text" id="progress-text">0/0</p>
+            </div>
+
             <div id="result"></div>
         </div>
     </div>
@@ -223,7 +308,12 @@
                     if (data.connected) {
                         connected = true;
                         document.getElementById('qr-screen').style.display = 'none';
+                        document.getElementById('sync-screen').style.display = 'none';
                         document.getElementById('send-screen').style.display = 'block';
+                    } else if (data.syncing) {
+                        document.getElementById('qr-screen').style.display = 'none';
+                        document.getElementById('sync-screen').style.display = 'block';
+                        document.getElementById('send-screen').style.display = 'none';
                     } else if (data.qr) {
                         document.getElementById('qr-loading').style.display = 'none';
                         const img = document.getElementById('qr-img');
@@ -288,6 +378,9 @@
             const mensagem = document.getElementById('mensagem').value.trim();
             const result = document.getElementById('result');
             const btn = document.getElementById('btn-send');
+            const progressBar = document.getElementById('progress-bar');
+            const progressFill = document.getElementById('progress-fill');
+            const progressText = document.getElementById('progress-text');
 
             if (!gruposText || !mensagem) {
                 result.className = 'error';
@@ -301,6 +394,9 @@
             btn.disabled = true;
             btn.textContent = 'Enviando...';
             result.style.display = 'none';
+            progressBar.style.display = 'block';
+            progressFill.style.width = '0%';
+            progressText.textContent = '0/' + grupos.length;
 
             try {
                 const res = await fetch('/send', {
@@ -309,21 +405,48 @@
                     body: JSON.stringify({ grupos, mensagem })
                 });
 
-                const data = await res.json();
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-                if (res.ok) {
-                    result.className = 'success';
-                    result.textContent = data.status || 'Mensagens enviadas com sucesso!';
-                } else {
-                    result.className = 'error';
-                    result.textContent = data.erro || 'Erro ao enviar';
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = JSON.parse(line.slice(6));
+
+                            if (data.error) {
+                                result.className = 'error';
+                                result.textContent = data.error;
+                                result.style.display = 'block';
+                            } else if (data.done) {
+                                progressFill.style.width = '100%';
+                                progressText.textContent = data.enviados + '/' + data.total + ' enviados';
+                                result.className = 'success';
+                                result.textContent = 'Concluído! ' + data.enviados + '/' + data.total + ' grupos processados.';
+                                result.style.display = 'block';
+                            } else {
+                                const pct = (data.current / data.total) * 100;
+                                progressFill.style.width = pct + '%';
+                                const status = data.erro ? '\u2716' : '\u2714';
+                                progressText.textContent = data.current + '/' + data.total + ' - ' + status + ' ' + data.grupo;
+                                btn.textContent = 'Enviando ' + data.current + '/' + data.total + '...';
+                            }
+                        }
+                    }
                 }
             } catch (err) {
                 result.className = 'error';
                 result.textContent = 'Erro de conexão com o servidor';
+                result.style.display = 'block';
             }
 
-            result.style.display = 'block';
             btn.disabled = false;
             btn.textContent = 'Enviar';
         }
