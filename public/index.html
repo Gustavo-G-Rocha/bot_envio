@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Envio - WhatsApp</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0b141a;
+            color: #e9edef;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 420px;
+        }
+
+        /* ===== TELA QR CODE ===== */
+        #qr-screen {
+            text-align: center;
+        }
+
+        #qr-screen h1 {
+            font-size: 1.4rem;
+            margin-bottom: 8px;
+            color: #25d366;
+        }
+
+        #qr-screen p {
+            font-size: 0.85rem;
+            color: #8696a0;
+            margin-bottom: 24px;
+        }
+
+        .qr-box {
+            background: #fff;
+            border-radius: 12px;
+            padding: 24px;
+            display: inline-block;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+        }
+
+        .qr-box img {
+            width: 260px;
+            height: 260px;
+        }
+
+        .qr-box .loading {
+            width: 260px;
+            height: 260px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #8696a0;
+            font-size: 0.9rem;
+        }
+
+        .status-text {
+            margin-top: 16px;
+            font-size: 0.85rem;
+            color: #8696a0;
+        }
+
+        /* ===== TELA ENVIO ===== */
+        #send-screen {
+            display: none;
+        }
+
+        #send-screen h1 {
+            font-size: 1.4rem;
+            margin-bottom: 4px;
+            color: #25d366;
+        }
+
+        #send-screen .subtitle {
+            font-size: 0.8rem;
+            color: #8696a0;
+            margin-bottom: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.8rem;
+            color: #8696a0;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-group textarea,
+        .form-group input[type="text"] {
+            width: 100%;
+            background: #1f2c34;
+            border: 1px solid #2a3942;
+            border-radius: 8px;
+            padding: 12px 14px;
+            color: #e9edef;
+            font-size: 0.9rem;
+            font-family: inherit;
+            resize: vertical;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .form-group textarea:focus,
+        .form-group input[type="text"]:focus {
+            border-color: #25d366;
+        }
+
+        .form-group textarea {
+            min-height: 100px;
+        }
+
+        .form-group .hint {
+            font-size: 0.72rem;
+            color: #667781;
+            margin-top: 4px;
+        }
+
+        .btn-send {
+            width: 100%;
+            padding: 14px;
+            background: #25d366;
+            color: #111b21;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-send:hover {
+            background: #1ebe57;
+        }
+
+        .btn-send:disabled {
+            background: #2a3942;
+            color: #667781;
+            cursor: not-allowed;
+        }
+
+        #result {
+            margin-top: 16px;
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            display: none;
+        }
+
+        #result.success {
+            background: #1a3a2a;
+            color: #25d366;
+            border: 1px solid #25d366;
+            display: block;
+        }
+
+        #result.error {
+            background: #3a1a1a;
+            color: #ff4444;
+            border: 1px solid #ff4444;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- TELA QR CODE -->
+        <div id="qr-screen">
+            <h1>WhatsApp Bot</h1>
+            <p>Escaneie o QR Code para conectar</p>
+            <div class="qr-box">
+                <div class="loading" id="qr-loading">Aguardando QR Code...</div>
+                <img id="qr-img" src="" alt="QR Code" style="display:none;">
+            </div>
+            <p class="status-text" id="status-text">Conectando...</p>
+        </div>
+
+        <!-- TELA ENVIO -->
+        <div id="send-screen">
+            <h1>Enviar Mensagem</h1>
+            <p class="subtitle">Conectado ao WhatsApp</p>
+
+            <div class="form-group">
+                <label>Grupos</label>
+                <textarea id="grupos" placeholder="Nome do Grupo 1&#10;Nome do Grupo 2&#10;Nome do Grupo 3"></textarea>
+                <p class="hint">Um grupo por linha</p>
+            </div>
+
+            <div class="form-group">
+                <label>Mensagem</label>
+                <textarea id="mensagem" placeholder="Digite sua mensagem aqui..."></textarea>
+            </div>
+
+            <button class="btn-send" id="btn-send" onclick="enviar()">Enviar</button>
+            <button class="btn-send" id="btn-groups" onclick="listarGrupos()" style="margin-top:10px; background:#2a3942; color:#e9edef;">Listar Grupos (baixar .txt)</button>
+            <div id="result"></div>
+        </div>
+    </div>
+
+    <script>
+        let connected = false;
+
+        // Polling de status
+        function checkStatus() {
+            fetch('/status')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.connected) {
+                        connected = true;
+                        document.getElementById('qr-screen').style.display = 'none';
+                        document.getElementById('send-screen').style.display = 'block';
+                    } else if (data.qr) {
+                        document.getElementById('qr-loading').style.display = 'none';
+                        const img = document.getElementById('qr-img');
+                        img.src = data.qr;
+                        img.style.display = 'block';
+                        document.getElementById('status-text').textContent = 'Escaneie o QR Code com seu WhatsApp';
+                    } else {
+                        document.getElementById('status-text').textContent = 'Aguardando QR Code...';
+                    }
+
+                    if (!connected) {
+                        setTimeout(checkStatus, 2000);
+                    }
+                })
+                .catch(() => {
+                    setTimeout(checkStatus, 3000);
+                });
+        }
+
+        checkStatus();
+
+        // Listar grupos e baixar txt
+        async function listarGrupos() {
+            const btn = document.getElementById('btn-groups');
+            const result = document.getElementById('result');
+            btn.disabled = true;
+            btn.textContent = 'Carregando...';
+            result.style.display = 'none';
+
+            try {
+                const res = await fetch('/groups');
+                const data = await res.json();
+
+                if (res.ok && data.grupos.length > 0) {
+                    const texto = data.grupos.join('\n');
+                    const blob = new Blob([texto], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'grupos.txt';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    result.className = 'success';
+                    result.textContent = `${data.grupos.length} grupos encontrados e baixados!`;
+                } else {
+                    result.className = 'error';
+                    result.textContent = data.erro || 'Nenhum grupo encontrado';
+                }
+            } catch (err) {
+                result.className = 'error';
+                result.textContent = 'Erro ao buscar grupos';
+            }
+
+            result.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = 'Listar Grupos (baixar .txt)';
+        }
+
+        // Enviar mensagem
+        async function enviar() {
+            const gruposText = document.getElementById('grupos').value.trim();
+            const mensagem = document.getElementById('mensagem').value.trim();
+            const result = document.getElementById('result');
+            const btn = document.getElementById('btn-send');
+
+            if (!gruposText || !mensagem) {
+                result.className = 'error';
+                result.textContent = 'Preencha todos os campos!';
+                result.style.display = 'block';
+                return;
+            }
+
+            const grupos = gruposText.split('\n').map(g => g.trim()).filter(g => g);
+
+            btn.disabled = true;
+            btn.textContent = 'Enviando...';
+            result.style.display = 'none';
+
+            try {
+                const res = await fetch('/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ grupos, mensagem })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    result.className = 'success';
+                    result.textContent = data.status || 'Mensagens enviadas com sucesso!';
+                } else {
+                    result.className = 'error';
+                    result.textContent = data.erro || 'Erro ao enviar';
+                }
+            } catch (err) {
+                result.className = 'error';
+                result.textContent = 'Erro de conexão com o servidor';
+            }
+
+            result.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = 'Enviar';
+        }
+    </script>
+</body>
+</html>
