@@ -131,6 +131,53 @@
             margin-top: 4px;
         }
 
+        .file-upload {
+            position: relative;
+            width: 100%;
+        }
+
+        .file-upload input[type="file"] {
+            display: none;
+        }
+
+        .file-upload-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            background: #1f2c34;
+            border: 1px dashed #2a3942;
+            border-radius: 8px;
+            padding: 14px;
+            color: #8696a0;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .file-upload-btn:hover {
+            border-color: #25d366;
+        }
+
+        .file-upload-btn.has-file {
+            border-color: #25d366;
+            color: #e9edef;
+        }
+
+        .file-upload-btn .icon {
+            font-size: 1.2rem;
+        }
+
+        .file-remove {
+            background: none;
+            border: none;
+            color: #ff4444;
+            font-size: 1.1rem;
+            cursor: pointer;
+            margin-left: auto;
+            padding: 0 4px;
+        }
+
         .btn-send {
             width: 100%;
             padding: 14px;
@@ -283,6 +330,18 @@
                 <textarea id="mensagem" placeholder="Digite sua mensagem aqui..."></textarea>
             </div>
 
+            <div class="form-group">
+                <label>Mídia (opcional)</label>
+                <div class="file-upload">
+                    <input type="file" id="media" accept="image/*,video/*,audio/*" onchange="onFileChange()">
+                    <div class="file-upload-btn" id="file-btn" onclick="document.getElementById('media').click()">
+                        <span class="icon">📎</span>
+                        <span id="file-name">Imagem, vídeo ou áudio</span>
+                    </div>
+                </div>
+                <p class="hint">Envie junto com a mensagem ou sozinho</p>
+            </div>
+
             <button class="btn-send" id="btn-send" onclick="enviar()">Enviar</button>
             <button class="btn-send" id="btn-groups" onclick="listarGrupos()" style="margin-top:10px; background:#2a3942; color:#e9edef;">Listar Grupos (baixar .txt)</button>
 
@@ -372,24 +431,58 @@
             btn.textContent = 'Listar Grupos (baixar .txt)';
         }
 
+        // File upload
+        function onFileChange() {
+            const input = document.getElementById('media');
+            const btn = document.getElementById('file-btn');
+            const nameEl = document.getElementById('file-name');
+            if (input.files.length > 0) {
+                nameEl.textContent = input.files[0].name;
+                btn.classList.add('has-file');
+                btn.innerHTML = '<span class="icon">📎</span><span id="file-name">' + input.files[0].name + '</span><button class="file-remove" onclick="removeFile(event)">✖</button>';
+            } else {
+                resetFileInput();
+            }
+        }
+
+        function removeFile(e) {
+            e.stopPropagation();
+            document.getElementById('media').value = '';
+            resetFileInput();
+        }
+
+        function resetFileInput() {
+            const btn = document.getElementById('file-btn');
+            btn.classList.remove('has-file');
+            btn.innerHTML = '<span class="icon">📎</span><span id="file-name">Imagem, vídeo ou áudio</span>';
+        }
+
         // Enviar mensagem
         async function enviar() {
             const gruposText = document.getElementById('grupos').value.trim();
             const mensagem = document.getElementById('mensagem').value.trim();
+            const mediaInput = document.getElementById('media');
             const result = document.getElementById('result');
             const btn = document.getElementById('btn-send');
             const progressBar = document.getElementById('progress-bar');
             const progressFill = document.getElementById('progress-fill');
             const progressText = document.getElementById('progress-text');
 
-            if (!gruposText || !mensagem) {
+            if (!gruposText || (!mensagem && mediaInput.files.length === 0)) {
                 result.className = 'error';
-                result.textContent = 'Preencha todos os campos!';
+                result.textContent = 'Preencha os grupos e adicione uma mensagem ou mídia!';
                 result.style.display = 'block';
                 return;
             }
 
             const grupos = gruposText.split('\n').map(g => g.trim()).filter(g => g);
+
+            const formData = new FormData();
+            formData.append('grupos', JSON.stringify(grupos));
+            formData.append('mensagem', mensagem);
+            if (mediaInput.files.length > 0) {
+                formData.append('media', mediaInput.files[0]);
+            }
 
             btn.disabled = true;
             btn.textContent = 'Enviando...';
@@ -401,8 +494,7 @@
             try {
                 const res = await fetch('/send', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ grupos, mensagem })
+                    body: formData
                 });
 
                 const reader = res.body.getReader();

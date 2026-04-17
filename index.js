@@ -1,9 +1,12 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const express = require('express');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
+const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+
+const upload = multer({ dest: path.join(__dirname, 'uploads') });
 
 const app = express();
 app.use(express.json());
@@ -69,12 +72,21 @@ app.get('/groups', async (req, res) => {
 });
 
 // 🔥 Endpoint envio
-app.post('/send', async (req, res) => {
-    const { grupos, mensagem } = req.body;
+app.post('/send', upload.single('media'), async (req, res) => {
+    const grupos = JSON.parse(req.body.grupos);
+    const mensagem = req.body.mensagem || '';
+    const file = req.file;
 
     // Salva no body.json
     const bodyPath = path.join(__dirname, 'body.json');
-    fs.writeFileSync(bodyPath, JSON.stringify({ grupos, mensagem }, null, 2));
+    fs.writeFileSync(bodyPath, JSON.stringify({ grupos, mensagem, media: file ? file.originalname : null }, null, 2));
+
+    // Prepara mídia se enviada
+    let media = null;
+    if (file) {
+        const fileData = fs.readFileSync(file.path).toString('base64');
+        media = new MessageMedia(file.mimetype, fileData, file.originalname);
+    }
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -92,7 +104,13 @@ app.post('/send', async (req, res) => {
             if (chat) {
                 const delay = Math.floor(Math.random() * 4000) + 1000;
                 await new Promise(resolve => setTimeout(resolve, delay));
-                await client.sendMessage(chat.id._serialized, mensagem);
+
+                if (media) {
+                    await client.sendMessage(chat.id._serialized, media, { caption: mensagem || undefined });
+                } else {
+                    await client.sendMessage(chat.id._serialized, mensagem);
+                }
+
                 enviados++;
                 console.log(`Enviado para ${chat.name} (espera: ${delay}ms)`);
                 res.write(`data: ${JSON.stringify({ current: enviados, total, grupo: chat.name })}\n\n`);
@@ -109,6 +127,11 @@ app.post('/send', async (req, res) => {
     } catch (err) {
         res.write(`data: ${JSON.stringify({ error: err.toString() })}\n\n`);
         res.end();
+    } finally {
+        // Limpa arquivo temporário
+        if (file) {
+            fs.unlink(file.path, () => {});
+        }
     }
 });
 
