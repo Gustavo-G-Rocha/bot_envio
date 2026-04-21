@@ -326,6 +326,6 @@ app.post('/logout', async (req, res) => {
 });
 
 // servidor
-app.listen(3000, () => {
-    console.log('API rodando em http://localhost:3000');
+app.listen(1414, () => {
+    console.log('API rodando em http://localhost:1414');
 });

@@ -1,0 +1,43 @@
+{
+  "appId": "com.botenvio.app",
+  "productName": "Bot Envio WhatsApp",
+  "directories": {
+    "buildResources": ".",
+    "output": "dist"
+  },
+  "files": [
+    "index.js",
+    "electron-main.js",
+    "preload.js",
+    "public/**/*",
+    "node_modules/**/*",
+    ".wwebjs_auth",
+    ".wwebjs_cache",
+    "uploads"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      },
+      {
+        "target": "portable",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  },
+  "portable": {
+    "artifactName": "${productName}-${version}.exe"
+  }
+}
