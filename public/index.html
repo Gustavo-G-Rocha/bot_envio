@@ -131,6 +131,31 @@
             margin-top: 4px;
         }
 
+        .mode-selector {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+
+        .mode-btn {
+            background: #1f2c34;
+            border: 1px solid #2a3942;
+            border-radius: 8px;
+            color: #8696a0;
+            padding: 10px 12px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+
+        .mode-btn.active {
+            background: #25d366;
+            border-color: #25d366;
+            color: #111b21;
+            font-weight: 600;
+        }
+
         .file-upload {
             position: relative;
             width: 100%;
@@ -319,18 +344,36 @@
             <h1>Enviar Mensagem</h1>
             <p class="subtitle">Conectado ao WhatsApp</p>
 
-            <div class="form-group">
+            <div class="mode-selector">
+                <button class="mode-btn active" id="mode-grupos" onclick="setModo('grupos')">Disparo em Grupos</button>
+                <button class="mode-btn" id="mode-numeros" onclick="setModo('numeros')">Disparo em Números</button>
+                <button class="mode-btn" id="mode-extracao" onclick="setModo('extracao')">Extrair Números</button>
+            </div>
+
+            <div class="form-group" id="grupo-field">
                 <label>Grupos</label>
                 <textarea id="grupos" placeholder="Nome do Grupo 1&#10;Nome do Grupo 2&#10;Nome do Grupo 3"></textarea>
                 <p class="hint">Um grupo por linha</p>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" id="numero-field" style="display:none;">
+                <label>Números</label>
+                <textarea id="numeros" placeholder="5511999999999&#10;+55 (11) 98888-7777&#10;https://wa.me/5511912345678"></textarea>
+                <p class="hint">Um número por linha (com DDI). Aceita número, wa.me e formato @c.us</p>
+            </div>
+
+            <div class="form-group" id="grupo-extracao-field" style="display:none;">
+                <label>Grupos para extração</label>
+                <textarea id="grupos-extracao" placeholder="Nome do Grupo 1&#10;Nome do Grupo 2&#10;Nome do Grupo 3"></textarea>
+                <p class="hint">Informe os grupos para gerar o .txt com todos os números dos membros</p>
+            </div>
+
+            <div class="form-group" id="mensagem-field">
                 <label>Mensagem</label>
                 <textarea id="mensagem" placeholder="Digite sua mensagem aqui..."></textarea>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" id="media-field">
                 <label>Mídia (opcional)</label>
                 <div class="file-upload">
                     <input type="file" id="media" accept="image/*,video/*,audio/*" onchange="onFileChange()">
@@ -343,6 +386,7 @@
             </div>
 
             <button class="btn-send" id="btn-send" onclick="enviar()">Enviar</button>
+            <button class="btn-send" id="btn-extract" onclick="extrairNumeros()" style="display:none; background:#25d366; color:#111b21; margin-bottom:10px;">Extrair Números dos Grupos (.txt)</button>
             <button class="btn-send" id="btn-groups" onclick="listarGrupos()" style="margin-top:10px; background:#2a3942; color:#e9edef;">Listar Grupos (baixar .txt)</button>
 
             <div id="progress-bar">
@@ -358,6 +402,33 @@
 
     <script>
         let connected = false;
+        let modoDisparo = 'grupos';
+
+        function setModo(modo) {
+            if (modo === 'numeros' || modo === 'extracao') {
+                modoDisparo = modo;
+            } else {
+                modoDisparo = 'grupos';
+            }
+
+            const isGrupos = modoDisparo === 'grupos';
+            const isExtracao = modoDisparo === 'extracao';
+
+            document.getElementById('mode-grupos').classList.toggle('active', isGrupos);
+            document.getElementById('mode-numeros').classList.toggle('active', modoDisparo === 'numeros');
+            document.getElementById('mode-extracao').classList.toggle('active', isExtracao);
+            document.getElementById('grupo-field').style.display = isGrupos ? 'block' : 'none';
+            document.getElementById('numero-field').style.display = modoDisparo === 'numeros' ? 'block' : 'none';
+            document.getElementById('grupo-extracao-field').style.display = isExtracao ? 'block' : 'none';
+            document.getElementById('mensagem-field').style.display = isExtracao ? 'none' : 'block';
+            document.getElementById('media-field').style.display = isExtracao ? 'none' : 'block';
+            document.getElementById('btn-send').style.display = isExtracao ? 'none' : 'block';
+            document.getElementById('btn-extract').style.display = isExtracao ? 'block' : 'none';
+            document.getElementById('btn-groups').style.display = (isGrupos || isExtracao) ? 'block' : 'none';
+            if (isExtracao) {
+                document.getElementById('progress-bar').style.display = 'none';
+            }
+        }
 
         // Polling de status
         function checkStatus() {
@@ -457,9 +528,67 @@
             btn.innerHTML = '<span class="icon">📎</span><span id="file-name">Imagem, vídeo ou áudio</span>';
         }
 
+        async function extrairNumeros() {
+            const gruposText = document.getElementById('grupos-extracao').value.trim();
+            const grupos = gruposText.split('\n').map(g => g.trim()).filter(g => g);
+            const result = document.getElementById('result');
+            const btn = document.getElementById('btn-extract');
+
+            if (grupos.length === 0) {
+                result.className = 'error';
+                result.textContent = 'Preencha os grupos para extrair os números!';
+                result.style.display = 'block';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Extraindo...';
+            result.style.display = 'none';
+
+            try {
+                const res = await fetch('/extract-members', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ grupos })
+                });
+
+                if (!res.ok) {
+                    const data = await res.json();
+                    throw new Error(data.erro || 'Falha ao extrair números');
+                }
+
+                const blob = await res.blob();
+                const texto = await blob.text();
+                const total = texto.split('\n').map(l => l.trim()).filter(l => l).length;
+
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'numeros_membros.txt';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                result.className = 'success';
+                result.textContent = total + ' números extraídos e baixados em .txt';
+                result.style.display = 'block';
+            } catch (err) {
+                result.className = 'error';
+                result.textContent = err.message || 'Erro ao extrair números';
+                result.style.display = 'block';
+            }
+
+            btn.disabled = false;
+            btn.textContent = 'Extrair Números dos Grupos (.txt)';
+        }
+
         // Enviar mensagem
         async function enviar() {
+            if (modoDisparo === 'extracao') {
+                return;
+            }
+
             const gruposText = document.getElementById('grupos').value.trim();
+            const numerosText = document.getElementById('numeros').value.trim();
             const mensagem = document.getElementById('mensagem').value.trim();
             const mediaInput = document.getElementById('media');
             const result = document.getElementById('result');
@@ -468,17 +597,23 @@
             const progressFill = document.getElementById('progress-fill');
             const progressText = document.getElementById('progress-text');
 
-            if (!gruposText || (!mensagem && mediaInput.files.length === 0)) {
+            const grupos = gruposText.split('\n').map(g => g.trim()).filter(g => g);
+            const numeros = numerosText.split('\n').map(n => n.trim()).filter(n => n);
+            const destinos = modoDisparo === 'grupos' ? grupos : numeros;
+
+            if (destinos.length === 0 || (!mensagem && mediaInput.files.length === 0)) {
                 result.className = 'error';
-                result.textContent = 'Preencha os grupos e adicione uma mensagem ou mídia!';
+                result.textContent = modoDisparo === 'grupos'
+                    ? 'Preencha os grupos e adicione uma mensagem ou mídia!'
+                    : 'Preencha os números e adicione uma mensagem ou mídia!';
                 result.style.display = 'block';
                 return;
             }
 
-            const grupos = gruposText.split('\n').map(g => g.trim()).filter(g => g);
-
             const formData = new FormData();
+            formData.append('tipo', modoDisparo);
             formData.append('grupos', JSON.stringify(grupos));
+            formData.append('numeros', JSON.stringify(numeros));
             formData.append('mensagem', mensagem);
             if (mediaInput.files.length > 0) {
                 formData.append('media', mediaInput.files[0]);
@@ -489,7 +624,7 @@
             result.style.display = 'none';
             progressBar.style.display = 'block';
             progressFill.style.width = '0%';
-            progressText.textContent = '0/' + grupos.length;
+            progressText.textContent = '0/' + destinos.length;
 
             try {
                 const res = await fetch('/send', {
@@ -521,13 +656,13 @@
                                 progressFill.style.width = '100%';
                                 progressText.textContent = data.enviados + '/' + data.total + ' enviados';
                                 result.className = 'success';
-                                result.textContent = 'Concluído! ' + data.enviados + '/' + data.total + ' grupos processados.';
+                                result.textContent = 'Concluído! ' + data.enviados + '/' + data.total + ' itens processados.';
                                 result.style.display = 'block';
                             } else {
                                 const pct = (data.current / data.total) * 100;
                                 progressFill.style.width = pct + '%';
                                 const status = data.erro ? '\u2716' : '\u2714';
-                                progressText.textContent = data.current + '/' + data.total + ' - ' + status + ' ' + data.grupo;
+                                progressText.textContent = data.current + '/' + data.total + ' - ' + status + ' ' + data.destino;
                                 btn.textContent = 'Enviando ' + data.current + '/' + data.total + '...';
                             }
                         }
