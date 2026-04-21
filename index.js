@@ -280,6 +280,51 @@ app.post('/send', upload.single('media'), async (req, res) => {
     }
 });
 
+// Logout do WhatsApp
+app.post('/logout', async (req, res) => {
+    try {
+        // Desconecta e destroi o cliente
+        try {
+            await client.logout();
+            await client.destroy();
+        } catch (e) {
+            console.log('Erro ao desconectar/destruir cliente:', e.message);
+        }
+        
+        // Apaga os arquivos de autenticação
+        const authPath = path.join(__dirname, '.wwebjs_auth');
+        const cachePath = path.join(__dirname, '.wwebjs_cache');
+        
+        function removeDir(dirPath) {
+            if (fs.existsSync(dirPath)) {
+                fs.readdirSync(dirPath).forEach(file => {
+                    const filePath = path.join(dirPath, file);
+                    if (fs.lstatSync(filePath).isDirectory()) {
+                        removeDir(filePath);
+                    } else {
+                        fs.unlinkSync(filePath);
+                    }
+                });
+                fs.rmdirSync(dirPath);
+            }
+        }
+        
+        removeDir(authPath);
+        removeDir(cachePath);
+        
+        isConnected = false;
+        isSyncing = false;
+        currentQR = null;
+        
+        // Reinicializa o cliente para gerar um novo QR code
+        client.initialize();
+        
+        res.json({ sucesso: true });
+    } catch (err) {
+        res.status(500).json({ erro: err.toString() });
+    }
+});
+
 // servidor
 app.listen(3000, () => {
     console.log('API rodando em http://localhost:3000');

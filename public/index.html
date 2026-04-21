@@ -287,6 +287,30 @@
             line-height: 1.5;
         }
 
+        .btn-logout {
+            width: 100%;
+            padding: 14px;
+            background: #ff4444;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 16px;
+        }
+
+        .btn-logout:hover {
+            background: #dd0000;
+        }
+
+        .btn-logout:disabled {
+            background: #2a3942;
+            color: #667781;
+            cursor: not-allowed;
+        }
+
         /* ===== PROGRESSO ENVIO ===== */
         #progress-bar {
             display: none;
@@ -388,6 +412,7 @@
             <button class="btn-send" id="btn-send" onclick="enviar()">Enviar</button>
             <button class="btn-send" id="btn-extract" onclick="extrairNumeros()" style="display:none; background:#25d366; color:#111b21; margin-bottom:10px;">Extrair Números dos Grupos (.txt)</button>
             <button class="btn-send" id="btn-groups" onclick="listarGrupos()" style="margin-top:10px; background:#2a3942; color:#e9edef;">Listar Grupos (baixar .txt)</button>
+            <button class="btn-logout" id="btn-logout" onclick="logout()">Deslogar WhatsApp</button>
 
             <div id="progress-bar">
                 <div class="progress-track">
@@ -579,6 +604,37 @@
 
             btn.disabled = false;
             btn.textContent = 'Extrair Números dos Grupos (.txt)';
+        }
+
+        // Logout
+        async function logout() {
+            const btn = document.getElementById('btn-logout');
+            if (!confirm('Tem certeza que deseja deslogar? Você precisará escanear o QR Code novamente.')) {
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Deslogando...';
+
+            try {
+                const res = await fetch('/logout', {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    setTimeout(() => {
+                        location.reload();
+                    }, 500);
+                } else {
+                    alert('Erro ao deslogar: ' + data.erro);
+                    btn.disabled = false;
+                    btn.textContent = 'Deslogar WhatsApp';
+                }
+            } catch (err) {
+                alert('Erro de conexão ao deslogar');
+                btn.disabled = false;
+                btn.textContent = 'Deslogar WhatsApp';
+            }
         }
 
         // Enviar mensagem
