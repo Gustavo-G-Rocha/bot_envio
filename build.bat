@@ -2,157 +2,65 @@
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-color 0A
-title Bot Envio WhatsApp
+cd /d "%~dp0"
 
-:check_node
-echo ====================================
-echo  Bot Envio WhatsApp
-echo ====================================
-echo.
-
-where node >nul 2>nul
-if %ERRORLEVEL% NEQ 0 (
-    color 0C
-    echo [ERRO] Node.js nao encontrado!
-    echo.
-    echo Por favor, instale Node.js em:
-    echo https://nodejs.org/
-    echo.
-    echo Depois execute este arquivo novamente.
-    pause
+if defined MSYSTEM (
     exit /b 1
 )
 
-node --version >nul 2>nul
-echo [OK] Node.js encontrado
-echo.
+:: ── Se nao foi chamado com argumento SILENT, relanca escondido ──────────────────
+if /i "%~1" NEQ "SILENT" (
+    powershell -NoProfile -WindowStyle Hidden -Command ^
+        "Start-Process 'cmd.exe' -ArgumentList ('/c \"%~f0\" SILENT') -WindowStyle Hidden"
+    exit /b
+)
+:: ────────────────────────────────────────────────────────────────────────────────
 
-REM Verifica se node_modules existe
-if not exist "node_modules" (
-    echo [AVISO] Dependencias nao encontradas
-    echo Instalando dependencias (pode demorar alguns minutos)...
-    echo.
-    call npm install
-    if %ERRORLEVEL% NEQ 0 (
-        color 0C
-        echo [ERRO] Falha ao instalar dependencias!
-        pause
-        exit /b 1
-    )
-    color 0A
-    echo [OK] Dependencias instaladas com sucesso
-    echo.
+where node >nul 2>nul
+if %ERRORLEVEL% NEQ 0 exit /b 1
+
+if not exist "node_modules\electron\cli.js" (
+    call :install_deps
+    if errorlevel 1 exit /b 1
+    if not exist "node_modules\electron\cli.js" exit /b 1
 )
 
-:menu
-cls
-color 0A
-echo ====================================
-echo  Bot Envio WhatsApp
-echo ====================================
-echo.
-echo Escolha uma opcao:
-echo.
-echo  1 - Iniciar a aplicacao
-echo  2 - Compilar para Windows (Instalador + Portable)
-echo  3 - Compilar apenas versao Portable (recomendado)
-echo  4 - Reinstalar dependencias
-echo  5 - Sair
-echo.
-set /p choice="Digite sua escolha (1-5): "
+start "" "node_modules\electron\dist\electron.exe" .
+exit /b 0
 
-if "%choice%"=="1" (
-    cls
-    echo.
-    echo Iniciando Bot Envio WhatsApp...
-    echo A aplicacao abrira em alguns segundos...
-    echo Pressione CTRL+C para parar
-    echo.
-    timeout /t 2 /nobreak
-    call npm run dev
-    if %ERRORLEVEL% NEQ 0 (
-        color 0C
-        echo.
-        echo [ERRO] Falha ao iniciar a aplicacao!
-        pause
-    )
-    goto menu
-)
 
-if "%choice%"=="2" (
-    cls
-    echo.
-    echo Compilando para Windows (Instalador + Portable)...
-    echo Isso pode demorar alguns minutos...
-    echo.
-    call npm run build-win
-    if %ERRORLEVEL% EQU 0 (
-        color 0A
-        echo.
-        echo [OK] Build concluido com sucesso!
-        echo Os arquivos estao em: dist\
-        echo.
-        pause
-    ) else (
-        color 0C
-        echo.
-        echo [ERRO] Falha ao compilar!
-        pause
-    )
-    goto menu
-)
 
-if "%choice%"=="3" (
-    cls
-    echo.
-    echo Compilando versao Portable...
-    echo Isso pode demorar alguns minutos...
-    echo.
-    call npm run build-portable
-    if %ERRORLEVEL% EQU 0 (
-        color 0A
-        echo.
-        echo [OK] Build concluido com sucesso!
-        echo O arquivo esta em: dist\
-        echo.
-        pause
-    ) else (
-        color 0C
-        echo.
-        echo [ERRO] Falha ao compilar!
-        pause
-    )
-    goto menu
-)
+:: ── Subrotina de instalacao ───────────────────────────────────────────────────
+:install_deps
+echo [INFO] Encerrando processos que possam bloquear arquivos...
+taskkill /f /im electron.exe >nul 2>nul
+taskkill /f /im node.exe >nul 2>nul
 
-if "%choice%"=="4" (
-    cls
-    echo.
-    echo Reinstalando dependencias...
-    echo Isso pode demorar alguns minutos...
-    echo.
-    rmdir /s /q node_modules 2>nul
-    call npm install
-    if %ERRORLEVEL% EQU 0 (
-        color 0A
-        echo.
-        echo [OK] Dependencias reinstaladas com sucesso!
-        pause
-    ) else (
-        color 0C
-        echo.
-        echo [ERRO] Falha ao reinstalar dependencias!
-        pause
-    )
-    goto menu
-)
+call :force_delete_node_modules
 
-if "%choice%"=="5" (
-    exit /b 0
-)
+echo [INFO] Instalando dependencias...
+call npm install --include=dev
+if exist "node_modules\electron\cli.js" exit /b 0
 
-color 0C
-echo [ERRO] Opcao invalida!
-timeout /t 2 /nobreak
-goto menu
+echo [AVISO] Primeira tentativa falhou. Limpando cache npm e tentando novamente...
+call npm cache clean --force >nul 2>nul
+call :force_delete_node_modules
+call npm install --include=dev
+if exist "node_modules\electron\cli.js" exit /b 0
+
+exit /b 1
+
+:force_delete_node_modules
+if not exist "node_modules" exit /b 0
+echo [INFO] Removendo node_modules (pode demorar alguns segundos)...
+:: Tenta via PowerShell primeiro (mais confiavel que rmdir no Windows)
+powershell -NoProfile -Command ^
+    "Remove-Item -Path '%~dp0node_modules' -Recurse -Force -ErrorAction SilentlyContinue"
+if not exist "node_modules" exit /b 0
+:: Fallback: robocopy para esvaziar depois rmdir
+set "_empty=%TEMP%\_bot_empty_%RANDOM%"
+mkdir "%_empty%" >nul 2>nul
+robocopy "%_empty%" "node_modules" /mir /njh /njs /nfl /ndl >nul 2>nul
+rmdir /s /q "%_empty%" >nul 2>nul
+rmdir /s /q "node_modules" >nul 2>nul
+exit /b 0

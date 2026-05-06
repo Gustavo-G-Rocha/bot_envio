@@ -5,9 +5,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "electron .",
-    "build": "electron-builder",
-    "build-win": "electron-builder --win",
-    "build-portable": "electron-builder --win --portable"
+    "build": "electron-builder --win nsis"
   },
   "keywords": [],
   "author": "",
@@ -21,7 +19,7 @@
     "whatsapp-web.js": "^1.34.6"
   },
   "devDependencies": {
-    "electron": "^latest",
-    "electron-builder": "^latest"
+    "electron": "latest",
+    "electron-builder": "latest"
   }
 }
