@@ -5,29 +5,19 @@
     "buildResources": ".",
     "output": "dist"
   },
-  "compression": "maximum",
+  "compression": "normal",
   "asar": false,
   "files": [
-    "index.js",
-    "electron-main.js",
-    "preload.js",
-    "logo.png",
-    "public/**/*",
-    "node_modules/**/*",
-    "uploads/**/*",
-    "!**/*.map",
+    ".chromium-cache/**/*",
+    "**/*",
     "!node_modules/.cache",
-    "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
-    "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
-    "!**/node_modules/*.d.ts",
-    "!**/node_modules/.bin",
-    "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
-    "!.editorconfig",
-    "!**/._*",
-    "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
-    "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
-    "!**/{appveyor.yml,.travis.yml,circle.yml}",
-    "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+    "!**/{.git,.hg,.svn,CVS,RCS,SCCS}",
+    "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp}"
+  ],
+  "asarUnpack": [
+    "node_modules/puppeteer/**/*",
+    "node_modules/whatsapp-web.js/**/*",
+    ".chromium-cache/**/*"
   ],
   "win": {
     "target": [
@@ -45,6 +35,9 @@
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
     "shortcutName": "Bot Envio WhatsApp",
-    "deleteAppDataOnUninstall": true
+    "deleteAppDataOnUninstall": true,
+    "perMachine": true,
+    "allowElevation": true,
+    "include": "installer.nsh"
   }
 }

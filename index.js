@@ -5,6 +5,91 @@ const QRCode = require('qrcode');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const puppeteer = require('puppeteer');
+
+// Função para encontrar o executável do Chromium
+function getChromiumPath() {
+    try {
+        console.log('=== PROCURANDO CHROMIUM ===');
+        console.log('__dirname:', __dirname);
+        console.log('process.cwd():', process.cwd());
+        console.log('process.resourcesPath:', process.resourcesPath);
+        
+        // Tenta o caminho padrão do Puppeteer primeiro (desenvolvimento)
+        try {
+            const defaultPath = puppeteer.executablePath();
+            if (fs.existsSync(defaultPath)) {
+                console.log('✅ Usando Puppeteer padrão:', defaultPath);
+                return defaultPath;
+            }
+        } catch (e) {
+            console.log('Puppeteer padrão não disponível');
+        }
+        
+        // Lista de possíveis localizações
+        const possiblePaths = [
+            path.join(__dirname, '.chromium-cache'),
+            path.join(process.cwd(), '.chromium-cache'),
+            process.resourcesPath ? path.join(process.resourcesPath, 'app', '.chromium-cache') : null,
+            process.resourcesPath ? path.join(process.resourcesPath, '.chromium-cache') : null,
+            // Caminho relativo ao executável — cobre instalações via NSIS
+            path.join(path.dirname(process.execPath), 'resources', 'app', '.chromium-cache'),
+        ].filter(p => p !== null);
+        
+        console.log('Verificando locais:', possiblePaths);
+        
+        // Procura recursivamente por chrome.exe
+        const findChrome = (dir) => {
+            try {
+                if (!fs.existsSync(dir)) {
+                    console.log('❌ Não existe:', dir);
+                    return null;
+                }
+                
+                console.log('🔍 Procurando em:', dir);
+                const files = fs.readdirSync(dir);
+                
+                for (const file of files) {
+                    const fullPath = path.join(dir, file);
+                    const stat = fs.statSync(fullPath);
+                    
+                    if (stat.isDirectory()) {
+                        const found = findChrome(fullPath);
+                        if (found) return found;
+                    } else if (file === 'chrome.exe' || file === 'chromium.exe') {
+                        console.log('✅ CHROMIUM ENCONTRADO:', fullPath);
+                        return fullPath;
+                    }
+                }
+            } catch (e) {
+                console.error('Erro ao procurar em:', dir, e.message);
+            }
+            return null;
+        };
+        
+        // Tenta cada local possível
+        for (const chromiumPath of possiblePaths) {
+            const chromePath = findChrome(chromiumPath);
+            if (chromePath) return chromePath;
+        }
+        
+        console.error('❌ CHROMIUM NÃO ENCONTRADO EM NENHUM LOCAL!');
+        console.error('Locais verificados:', possiblePaths);
+        throw new Error(
+            'Chromium não encontrado.\n\n' +
+            'Locais verificados:\n' +
+            possiblePaths.map(p => '  ' + p).join('\n') + '\n\n' +
+            'Soluções:\n' +
+            '  1. Reinstale o aplicativo com o instalador mais recente\n' +
+            '  2. Adicione a pasta de instalação como exceção no antivírus\n' +
+            '  3. Verifique se o Windows Firewall não está bloqueando o Chromium\n' +
+            '  4. Execute o instalador como Administrador'
+        );
+    } catch (error) {
+        console.error('❌ ERRO AO PROCURAR CHROMIUM:', error);
+        throw error;
+    }
+}
 
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
 
@@ -88,7 +173,16 @@ const client = new Client({
     authStrategy: new LocalAuth(), // salva sessão
     puppeteer: {
         headless: true, // roda sem abrir tela
-        args: ['--no-sandbox']
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ],
+        executablePath: getChromiumPath()
     }
 });
 
