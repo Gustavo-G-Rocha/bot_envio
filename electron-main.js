@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
@@ -224,6 +224,70 @@ function setupFirewallRule() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 
+// ── Sistema de Licença ────────────────────────────────────────────────────────
+
+/**
+ * Exibe a janela de ativação e aguarda o usuário inserir uma chave válida.
+ * Retorna uma Promise que resolve com true (ativado) ou false (janela fechada).
+ */
+function showActivationWindow(deviceId) {
+    return new Promise((resolve) => {
+        const activationWin = new BrowserWindow({
+            width: 500,
+            height: 800,
+            resizable: false,
+            center: true,
+            title: 'Ativação — Bot Envio WhatsApp',
+            icon: path.join(__dirname, 'logo.png'),
+            webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                preload: path.join(__dirname, 'preload-activation.js'),
+            },
+        });
+
+        activationWin.setMenuBarVisibility(false);
+        activationWin.loadFile(path.join(__dirname, 'public', 'activation.html'));
+
+        const { validateLicense, saveLicense } = require('./src/license');
+        let activatedSuccessfully = false;
+
+        ipcMain.handleOnce('license:validate', async (event, key) => {
+            try {
+                log('Validando chave:', key);
+                const result = await validateLicense(key, deviceId);
+                log('Resultado da validação:', JSON.stringify(result));
+
+                if (result.valid) {
+                    saveLicense(key);
+                    activatedSuccessfully = true;
+                    // Aguarda um momento para o usuário ver a mensagem de sucesso
+                    setTimeout(() => {
+                        if (!activationWin.isDestroyed()) activationWin.close();
+                        resolve(true);
+                    }, 1500);
+                }
+
+                return result;
+            } catch (err) {
+                log('Erro na validação de licença:', err.message);
+                return { valid: false, message: 'Erro de conexão. Verifique sua internet e tente novamente.' };
+            }
+        });
+
+        activationWin.on('closed', () => {
+            // Remove o handler caso a janela seja fechada antes de ativar
+            try { ipcMain.removeHandler('license:validate'); } catch { /* já removido */ }
+            // Só resolve false se o usuário fechou manualmente (sem ativar)
+            if (!activatedSuccessfully) {
+                resolve(false);
+            }
+        });
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.on('ready', async () => {
     try {
         log('=== BOT ENVIO WHATSAPP INICIANDO ===');
@@ -238,7 +302,63 @@ app.on('ready', async () => {
         // 2. Tenta configurar permissão de rede (melhor esforço, requer admin)
         setupFirewallRule();
 
-        // Iniciar servidor no mesmo processo
+        // 3. Verificação de licença (obrigatória, sem modo offline)
+        const { loadLicense, validateLicense, clearLicense } = require('./src/license');
+        const { getDeviceId } = require('./src/device-id');
+
+        const deviceId = getDeviceId();
+        log('Device ID:', deviceId);
+
+        let savedKey = loadLicense();
+        log('Chave salva localmente:', savedKey ? 'sim' : 'não');
+
+        if (savedKey) {
+            log('Verificando licença salva contra servidor...');
+            try {
+                const licenseResult = await validateLicense(savedKey, deviceId);
+                if (!licenseResult.valid) {
+                    log('Licença inválida/revogada:', licenseResult.message);
+                    clearLicense();
+                    savedKey = null;
+
+                    const { dialog } = require('electron');
+                    await dialog.showMessageBox({
+                        type: 'warning',
+                        title: 'Licença Inválida',
+                        message: 'Sua licença não é mais válida.',
+                        detail: licenseResult.message + '\n\nVocê precisará inserir uma nova chave de licença.',
+                        buttons: ['Continuar'],
+                    });
+                } else {
+                    log('Licença válida!');
+                }
+            } catch (err) {
+                log('Erro ao verificar licença:', err.message);
+                const { dialog } = require('electron');
+                await dialog.showMessageBox({
+                    type: 'error',
+                    title: 'Erro de Conexão',
+                    message: 'Não foi possível verificar sua licença.',
+                    detail: 'Verifique sua conexão com a internet e tente novamente.\n\nDetalhes: ' + err.message,
+                    buttons: ['Fechar'],
+                });
+                app.quit();
+                return;
+            }
+        }
+
+        if (!savedKey) {
+            log('Abrindo janela de ativação...');
+            const activated = await showActivationWindow(deviceId);
+            if (!activated) {
+                log('Usuário fechou a janela de ativação sem ativar.');
+                app.quit();
+                return;
+            }
+            log('Licença ativada com sucesso!');
+        }
+
+        // 4. Iniciar servidor no mesmo processo
         startServer();
         
         // Aguardar um pouco para o servidor inicializar
