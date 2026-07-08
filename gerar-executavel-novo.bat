@@ -12,7 +12,7 @@ cd /d "%~dp0"
 
 :: Deve ficar antes de todo npm install para que o Chromium baixe na pasta do projeto
 set PUPPETEER_CACHE_DIR=%CD%\.chromium-cache
-set PUPPETEER_SKIP_DOWNLOAD=false
+set PUPPETEER_SKIP_DOWNLOAD=true
 set PUPPETEER_DOWNLOAD_HOST=https://storage.googleapis.com
 
 where node >nul 2>nul
@@ -52,25 +52,17 @@ echo OK - Dependencias instaladas
 echo.
 
 echo Baixando Chromium...
-:: Verifica se o npm install ja baixou via .puppeteerrc.cjs
 dir .chromium-cache /s /b 2>nul | find /i "chrome.exe" >nul
 if %ERRORLEVEL% EQU 0 (
-    echo OK - Chromium ja presente, pulando download redundante
+    echo OK - Chromium ja presente, pulando download
     goto :chromium_ok
 )
-:: Nao encontrado: forca reinstalacao do puppeteer para disparar o download
-if exist "node_modules\puppeteer" rmdir /s /q node_modules\puppeteer 2>nul
-call npm install puppeteer --force
+:: Baixa diretamente via install.mjs com caminho absoluto (evita falha de extract-zip)
+node node_modules\puppeteer\install.mjs
 if %ERRORLEVEL% NEQ 0 (
-    echo Tentando copiar do cache global...
-    set GLOBAL_CACHE=%USERPROFILE%\.cache\puppeteer
-    if exist "!GLOBAL_CACHE!\chrome" (
-        xcopy /E /I /Y /Q "!GLOBAL_CACHE!" ".chromium-cache\"
-    ) else (
-        echo ERRO: Chromium nao encontrado e sem cache global disponivel
-        pause
-        exit /b 1
-    )
+    echo ERRO: Falha ao baixar Chromium
+    pause
+    exit /b 1
 )
 :chromium_ok
 :: Verificacao obrigatoria - se nao tiver chrome.exe o instalador nao funcionara

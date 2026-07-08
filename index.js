@@ -7,6 +7,21 @@ const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer');
 
+const BANIDOS_FILE = path.join(__dirname, 'banidos.json');
+
+function readBanidos() {
+    try {
+        if (fs.existsSync(BANIDOS_FILE)) {
+            return JSON.parse(fs.readFileSync(BANIDOS_FILE, 'utf8'));
+        }
+    } catch (_) {}
+    return { banidos: [] };
+}
+
+function writeBanidos(data) {
+    fs.writeFileSync(BANIDOS_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
 // Função para encontrar o executável do Chromium
 function getChromiumPath() {
     try {
@@ -17,10 +32,17 @@ function getChromiumPath() {
         
         // Tenta o caminho padrão do Puppeteer primeiro (desenvolvimento)
         try {
-            const defaultPath = puppeteer.executablePath();
+            const rawPath = puppeteer.executablePath();
+            const defaultPath = path.resolve(__dirname, rawPath.startsWith('.') ? rawPath : path.relative(__dirname, rawPath));
             if (fs.existsSync(defaultPath)) {
                 console.log('✅ Usando Puppeteer padrão:', defaultPath);
                 return defaultPath;
+            }
+            // Também tenta o path resolvido a partir do cwd
+            const cwdPath = path.resolve(rawPath);
+            if (fs.existsSync(cwdPath)) {
+                console.log('✅ Usando Puppeteer (cwd):', cwdPath);
+                return cwdPath;
             }
         } catch (e) {
             console.log('Puppeteer padrão não disponível');
@@ -414,6 +436,338 @@ app.post('/logout', async (req, res) => {
         client.initialize();
         
         res.json({ sucesso: true });
+    } catch (err) {
+        res.status(500).json({ erro: err.toString() });
+    }
+});
+
+// Compara os últimos 8 dígitos para tolerar o 9° dígito e variações de DDI/DDD
+function numbersMatch(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.length >= 8 && b.length >= 8) {
+        return a.slice(-8) === b.slice(-8);
+    }
+    return false;
+}
+
+// Mapa { subGroupId → communityRootId } via pupPage
+async function getCommunityMap() {
+    try {
+        return await client.pupPage.evaluate(() => {
+            try {
+                const WAWebCollections = window.require('WAWebCollections');
+                const chatStore = WAWebCollections.Chat || WAWebCollections.WAWebChatCollection;
+                const models = chatStore?.getModelsArray?.()
+                    || chatStore?.models
+                    || Array.from(chatStore?.values?.() || []);
+                const map = {};
+                for (const chat of models) {
+                    if (!chat.isGroup) continue;
+                    const gm = chat.groupMetadata;
+                    if (!gm) continue;
+                    const lp = (gm.get ? gm.get('linkedParent') : undefined)
+                        ?? gm.__x_linkedParent
+                        ?? gm.linkedParent;
+                    if (lp) {
+                        const chatId = chat.id?._serialized;
+                        const parentId = typeof lp === 'string' ? lp : lp?._serialized;
+                        if (chatId && parentId) map[chatId] = parentId;
+                    }
+                }
+                return map;
+            } catch (_) { return {}; }
+        });
+    } catch (_) { return {}; }
+}
+
+// Sub-grupos cobertos pela comunidade raiz são pulados no ban
+function deduplicateCommunityBans(detalhes) {
+    const groupIds = new Set(detalhes.map(g => g.groupId));
+    const communityRootsInList = new Set(
+        detalhes
+            .filter(g => g.communityId && groupIds.has(g.communityId))
+            .map(g => g.communityId)
+    );
+    const toBan = [], skipped = [];
+    for (const g of detalhes) {
+        if (g.communityId && communityRootsInList.has(g.communityId)) {
+            skipped.push(g);
+        } else {
+            toBan.push(g);
+        }
+    }
+    return { toBan, skipped };
+}
+
+// Remoção direta via pupPage (suporta grupos normais e comunidades)
+async function removeParticipantDirect(chatId, participantId) {
+    return await client.pupPage.evaluate(async ({ chatId, participantId }) => {
+        const createWid = window.require('WAWebWidFactory').createWid;
+        const { toPn } = window.require('WAWebLidMigrationUtils');
+
+        try {
+            const chatWid = createWid(chatId);
+            const GM = window.require('WAWebCollections').GroupMetadata ||
+                window.require('WAWebCollections').WAWebGroupMetadataCollection;
+            await GM.update(chatWid);
+        } catch (_) {}
+
+        const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+        const gm = chat?.groupMetadata;
+        if (!gm) throw new Error('groupMetadata indisponível');
+
+        const targetSuffix = participantId.replace(/@\w+$/, '').replace(/\D/g, '').slice(-8);
+
+        // Caminho 1: grupos normais
+        const collection = gm.participants;
+        const allModels = collection?.models || Array.from(collection?.values?.() || []);
+
+        if (allModels.length > 0) {
+            let found = null;
+            for (const p of allModels) {
+                const rawId = typeof p.id === 'string' ? p.id : (p.id?._serialized || '');
+                if (rawId === participantId) { found = p; break; }
+                if (rawId.includes('@lid')) {
+                    try {
+                        const phoneWid = toPn(createWid(rawId));
+                        if (phoneWid) {
+                            const phoneId = phoneWid._serialized;
+                            if (phoneId === participantId) { found = p; break; }
+                            if (targetSuffix.length === 8) {
+                                const pNum = phoneId.replace(/@\w+$/, '').replace(/\D/g, '');
+                                if (pNum.slice(-8) === targetSuffix) { found = p; break; }
+                            }
+                        }
+                    } catch (_) {}
+                }
+                if (targetSuffix.length === 8) {
+                    const pNum = rawId.replace(/@\w+$/, '').replace(/\D/g, '');
+                    if (pNum.length >= 8 && pNum.slice(-8) === targetSuffix) { found = p; break; }
+                }
+            }
+            if (!found) throw new Error('Participante não encontrado no grupo');
+            await window.require('WAWebModifyParticipantsGroupAction').removeParticipants(chat, [found]);
+            return { status: 200 };
+        }
+
+        // Caminho 2: comunidades (LINKED_ANNOUNCEMENT_GROUP)
+        const sm = gm.serialize?.();
+        const serializedParticipants = sm?.participants || [];
+        if (serializedParticipants.length === 0) {
+            throw new Error('Sem participantes na comunidade (não é admin ou metadados não carregados)');
+        }
+
+        let targetSp = null;
+        for (const sp of serializedParticipants) {
+            const spId = sp.id;
+            const phoneWid = toPn(spId);
+            const phoneId = phoneWid?._serialized || '';
+            if (phoneId === participantId) { targetSp = sp; break; }
+            if (targetSuffix.length === 8 && phoneId) {
+                const pNum = phoneId.replace(/@\w+$/, '').replace(/\D/g, '');
+                if (pNum.slice(-8) === targetSuffix) { targetSp = sp; break; }
+            }
+            const rawId = spId?._serialized || '';
+            if (rawId === participantId) { targetSp = sp; break; }
+            if (targetSuffix.length === 8) {
+                const pNum = rawId.replace(/@\w+$/, '').replace(/\D/g, '');
+                if (pNum.length >= 8 && pNum.slice(-8) === targetSuffix) { targetSp = sp; break; }
+            }
+        }
+        if (!targetSp) throw new Error('Participante não encontrado na comunidade');
+
+        const widToGroupJid = window.require('WAWebWidToJid').widToGroupJid;
+        const widToUserJid  = window.require('WAWebWidToJid').widToUserJid;
+        const groupWid = createWid(chatId);
+        const iqTo = widToGroupJid(groupWid);
+        const participantJid = widToUserJid(targetSp.id);
+        const rpcResult = await window.require('WASmaxGroupsRemoveParticipantsRPC')
+            .sendRemoveParticipantsRPC({ participantArgs: [{ participantJid }], iqTo });
+
+        if (rpcResult?.name === 'RemoveParticipantsResponseClientError' ||
+            rpcResult?.name === 'RemoveParticipantsResponseServerError') {
+            const code = rpcResult?.value?.errorRemoveParticipantsClientErrors?.value?.code
+                || rpcResult?.value?.errorRemoveParticipantsServerErrors?.value?.code;
+            const text = rpcResult?.value?.errorRemoveParticipantsClientErrors?.value?.text
+                || rpcResult?.value?.errorRemoveParticipantsServerErrors?.value?.text
+                || 'erro desconhecido';
+            if (code === 401) throw new Error('Bot não é admin da comunidade');
+            throw new Error(`Comunidade recusou: ${text} (${code})`);
+        }
+
+        return { status: 200 };
+    }, { chatId, participantId });
+}
+
+// Buscar em quais grupos um número está (retorna gruposDetalhes para expulsão)
+app.post('/find-groups-by-number', async (req, res) => {
+    const numeros = Array.isArray(req.body.numeros)
+        ? req.body.numeros
+        : parseJsonArray(req.body.numeros);
+
+    if (numeros.length === 0) {
+        return res.status(400).json({ erro: 'Informe ao menos um número' });
+    }
+
+    try {
+        const chats = await client.getChats();
+        const grupos = chats.filter(c => c.isGroup || c.isCommunity);
+
+        const gruposComParticipantes = [];
+        for (const grupo of grupos) {
+            try {
+                const groupChat = await client.getChatById(grupo.id._serialized);
+                const participantes = Array.isArray(groupChat.participants) ? groupChat.participants : [];
+                gruposComParticipantes.push({ nome: grupo.name, groupId: grupo.id._serialized, participantes });
+            } catch (_) {}
+        }
+
+        const communityMap = await getCommunityMap();
+
+        const results = [];
+        for (const rawNumero of numeros) {
+            const numero = normalizePhone(rawNumero);
+            if (!numero) {
+                results.push({ numero: rawNumero, grupos: [], gruposDetalhes: [], invalido: true });
+                continue;
+            }
+
+            const gruposDoNumero = [];
+            const gruposDetalhes = [];
+            for (const { nome, groupId, participantes } of gruposComParticipantes) {
+                const participante = participantes.find(p =>
+                    numbersMatch(extractParticipantNumber(p), numero)
+                );
+                if (participante) {
+                    gruposDoNumero.push(nome);
+                    const participantId = participante.id._serialized
+                        || (participante.id.user ? `${participante.id.user}@c.us` : null);
+                    if (participantId) {
+                        gruposDetalhes.push({ nome, groupId, participantId, communityId: communityMap[groupId] || null });
+                    }
+                }
+            }
+
+            results.push({ numero, grupos: gruposDoNumero, gruposDetalhes });
+        }
+
+        res.json({ totalGrupos: gruposComParticipantes.length, results });
+    } catch (err) {
+        res.status(500).json({ erro: err.toString() });
+    }
+});
+
+// Expulsar participantes dos grupos encontrados
+app.post('/expulsar', async (req, res) => {
+    const { entries } = req.body;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    if (!Array.isArray(entries) || entries.length === 0) {
+        res.write(`data: ${JSON.stringify({ tipo: 'erro', erro: 'Nenhuma entrada para expulsar' })}\n\n`);
+        res.end();
+        return;
+    }
+
+    let expulsos = 0, erros = 0;
+    for (const entry of entries) {
+        const detalhes = Array.isArray(entry.gruposDetalhes) ? entry.gruposDetalhes : [];
+        const { toBan, skipped } = deduplicateCommunityBans(detalhes);
+        for (const g of skipped) {
+            res.write(`data: ${JSON.stringify({ tipo: 'progresso', numero: entry.numero, grupo: g.nome, sucesso: true, pulado: true })}\n\n`);
+        }
+        for (const g of toBan) {
+            try {
+                await removeParticipantDirect(g.groupId, g.participantId);
+                expulsos++;
+                res.write(`data: ${JSON.stringify({ tipo: 'progresso', numero: entry.numero, grupo: g.nome, sucesso: true })}\n\n`);
+            } catch (e) {
+                erros++;
+                res.write(`data: ${JSON.stringify({ tipo: 'progresso', numero: entry.numero, grupo: g.nome, sucesso: false, erro: e.message })}\n\n`);
+            }
+        }
+    }
+    res.write(`data: ${JSON.stringify({ tipo: 'done', expulsos, erros })}\n\n`);
+    res.end();
+});
+
+// Banidos — CRUD
+app.get('/banidos', (req, res) => {
+    res.json(readBanidos());
+});
+
+app.post('/banidos/salvar', (req, res) => {
+    const { entries } = req.body;
+    if (!Array.isArray(entries) || entries.length === 0) {
+        return res.status(400).json({ erro: 'Nenhum dado para salvar' });
+    }
+    const data = readBanidos();
+    for (const entry of entries) {
+        const idx = data.banidos.findIndex(b => b.numero === entry.numero);
+        const record = {
+            numero: entry.numero,
+            grupos: entry.grupos || [],
+            motivo: entry.motivo || '',
+            dataVerificacao: new Date().toISOString()
+        };
+        if (idx >= 0) {
+            data.banidos[idx] = record;
+        } else {
+            data.banidos.push(record);
+        }
+    }
+    writeBanidos(data);
+    res.json({ sucesso: true, total: data.banidos.length });
+});
+
+app.delete('/banidos/:numero', (req, res) => {
+    const numero = decodeURIComponent(req.params.numero);
+    const data = readBanidos();
+    data.banidos = data.banidos.filter(b => b.numero !== numero);
+    writeBanidos(data);
+    res.json({ sucesso: true });
+});
+
+// Trancar / Destrancar grupos (somente admins podem enviar)
+app.post('/group-manage', async (req, res) => {
+    const grupos = Array.isArray(req.body.grupos)
+        ? req.body.grupos
+        : parseJsonArray(req.body.grupos);
+    const acao = req.body.acao; // 'lock' ou 'unlock'
+
+    if (grupos.length === 0) {
+        return res.status(400).json({ erro: 'Informe ao menos um grupo' });
+    }
+    if (acao !== 'lock' && acao !== 'unlock') {
+        return res.status(400).json({ erro: 'Ação inválida' });
+    }
+
+    try {
+        const chats = await client.getChats();
+        const results = [];
+
+        for (const nomeGrupo of grupos) {
+            const nome = String(nomeGrupo || '').trim();
+            const nomeNorm = nome.normalize('NFC').toLowerCase();
+            const chat = chats.find(c => c.isGroup && c.name && c.name.trim().normalize('NFC').toLowerCase() === nomeNorm);
+
+            if (!chat) {
+                results.push({ nome, status: 'nao_encontrado' });
+                continue;
+            }
+
+            try {
+                const groupChat = await client.getChatById(chat.id._serialized);
+                await groupChat.setMessagesAdminsOnly(acao === 'lock');
+                results.push({ nome: chat.name, status: 'ok' });
+            } catch (e) {
+                results.push({ nome: chat.name, status: 'erro', detalhe: e.message });
+            }
+        }
+
+        res.json({ results });
     } catch (err) {
         res.status(500).json({ erro: err.toString() });
     }

@@ -12,7 +12,10 @@
     "**/*",
     "!node_modules/.cache",
     "!**/{.git,.hg,.svn,CVS,RCS,SCCS}",
-    "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp}"
+    "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp}",
+    "!banidos.json",
+    "!body.json",
+    "!uploads/**/*"
   ],
   "asarUnpack": [
     "node_modules/puppeteer/**/*",
