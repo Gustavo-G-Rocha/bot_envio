@@ -191,10 +191,9 @@ function extractParticipantNumber(participant) {
 // Cliente WhatsApp
 const client = new Client({
     authStrategy: new LocalAuth({ dataPath: path.join(dataDir, '.wwebjs_auth') }), // salva sessão em pasta gravavel
-    webVersionCache: {
-        type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1043293986-alpha.html',
-    },
+    // Sem webVersionCache fixo: a lib usa a versão ATUAL do WhatsApp Web (default
+    // 'local'). Fixar uma versão antiga fazia o sendMessage "resolver" sem
+    // entregar (falso positivo), pois o WhatsApp rejeita versões desatualizadas.
     puppeteer: {
         headless: true, // roda sem abrir tela
         args: [
