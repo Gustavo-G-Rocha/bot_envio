@@ -21,6 +21,7 @@ package-lock.json
 .wwebjs_cache/
 uploads/
 body.json
+banidos.json
 .env
 .vscode/
 npm-debug.log*
