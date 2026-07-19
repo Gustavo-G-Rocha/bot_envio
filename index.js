@@ -103,9 +103,11 @@ function getChromiumPath() {
 }
 
 function logErrorDetalhado(contexto, err) {
+    const linha = `[${new Date().toISOString()}] ${contexto}: ${err && err.stack ? err.stack : err}`;
+    // Também imprime no console (stdout / DevTools) para acesso rápido.
+    console.log(linha);
     try {
-        const linha = `[${new Date().toISOString()}] ${contexto}: ${err && err.stack ? err.stack : err}\n`;
-        fs.appendFileSync(path.join(dataDir, 'erro-detalhado.log'), linha);
+        fs.appendFileSync(path.join(dataDir, 'erro-detalhado.log'), linha + '\n');
     } catch {
         // ignora falha ao gravar log
     }
@@ -157,7 +159,32 @@ async function resolveNumberChatId(rawNumber) {
         return null;
     }
 
-    return numberResult._serialized;
+    let chatId = numberResult._serialized;
+
+    // O WhatsApp migrou contatos para "LID" (@lid). O getNumberId pode retornar
+    // um @lid, e enviar direto para @lid FALHA (mensagem não sai, ack -1).
+    // Converte o @lid de volta para o telefone (@c.us) usando o mapeamento
+    // interno da lib (mesmo mecanismo usado na expulsão de participantes).
+    if (chatId.endsWith('@lid')) {
+        try {
+            const pn = await client.pupPage.evaluate((lid) => {
+                try {
+                    const createWid = window.require('WAWebWidFactory').createWid;
+                    const { toPn } = window.require('WAWebLidMigrationUtils');
+                    const phoneWid = toPn(createWid(lid));
+                    return phoneWid ? phoneWid._serialized : null;
+                } catch (_) { return null; }
+            }, chatId);
+            if (pn) chatId = pn;
+        } catch (_) { /* tenta fallback abaixo */ }
+
+        // Se a conversão não deu certo, tenta o telefone digitado como @c.us.
+        if (chatId.endsWith('@lid')) {
+            chatId = `${digits}@c.us`;
+        }
+    }
+
+    return chatId;
 }
 
 function extractDigitsFromChatId(chatId) {
@@ -191,9 +218,10 @@ function extractParticipantNumber(participant) {
 // Cliente WhatsApp
 const client = new Client({
     authStrategy: new LocalAuth({ dataPath: path.join(dataDir, '.wwebjs_auth') }), // salva sessão em pasta gravavel
-    // Sem webVersionCache fixo: a lib usa a versão ATUAL do WhatsApp Web (default
-    // 'local'). Fixar uma versão antiga fazia o sendMessage "resolver" sem
-    // entregar (falso positivo), pois o WhatsApp rejeita versões desatualizadas.
+    // type 'none': usa a versão ATUAL do WhatsApp Web (ao vivo) e NÃO grava
+    // cache em disco. Fixar versão antiga fazia o sendMessage "resolver" sem
+    // entregar; o default 'local' tentaria gravar em C:\Program Files (só leitura).
+    webVersionCache: { type: 'none' },
     puppeteer: {
         headless: true, // roda sem abrir tela
         args: [
@@ -231,10 +259,20 @@ client.on('ready', () => {
     currentQR = null;
 });
 
-client.on('disconnected', () => {
+client.on('disconnected', (reason) => {
     console.log('WhatsApp desconectado');
+    logErrorDetalhado('DIAG disconnected', String(reason));
     isConnected = false;
     isSyncing = false;
+});
+
+// DIAGNÓSTICO: registra a evolução do ack (confirmação) das mensagens enviadas.
+// ack: -1=erro, 0=pendente(relogio), 1=enviado ao servidor, 2=entregue, 3=lido.
+// Se nunca chegar ack >= 1, a mensagem não saiu do dispositivo.
+client.on('message_ack', (msg, ack) => {
+    try {
+        logErrorDetalhado('DIAG ack', `msgId=${msg && msg.id ? msg.id._serialized : '?'} ack=${ack} to=${msg ? msg.to : '?'}`);
+    } catch (_) {}
 });
 
 client.initialize();
@@ -359,17 +397,22 @@ app.post('/send', upload.single('media'), async (req, res) => {
     const randDelay = () => Math.floor(Math.random() * 4000) + 1000;
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     async function enviarPara(chatId) {
+        const enviarUma = async (conteudo, opts) => {
+            const msg = await client.sendMessage(chatId, conteudo, opts);
+            logErrorDetalhado('DIAG enviado', `chatId=${chatId} msgId=${msg && msg.id ? msg.id._serialized : 'SEM-ID'} ackInicial=${msg ? msg.ack : 'n/a'} temMsg=${!!msg}`);
+            return msg;
+        };
         if (media) {
             await sleep(randDelay());
-            await client.sendMessage(chatId, media, { caption: mensagens[0] || undefined });
+            await enviarUma(media, { caption: mensagens[0] || undefined });
             for (let i = 1; i < mensagens.length; i++) {
                 await sleep(randDelay());
-                await client.sendMessage(chatId, mensagens[i]);
+                await enviarUma(mensagens[i]);
             }
         } else {
             for (const msg of mensagens) {
                 await sleep(randDelay());
-                await client.sendMessage(chatId, msg);
+                await enviarUma(msg);
             }
         }
     }
@@ -379,6 +422,9 @@ app.post('/send', upload.single('media'), async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
 
     try {
+        const widInfo = (client.info && client.info.wid) ? client.info.wid._serialized : 'SEM-INFO';
+        logErrorDetalhado('DIAG /send inicio', `connected=${isConnected} minhaConta=${widInfo} tipo=${tipo} destinos=${JSON.stringify(destinos)} qtdMensagens=${mensagens.length} mensagens=${JSON.stringify(mensagens)}`);
+
         const chats = await getChatsResilientes();
         const total = destinos.length;
         let enviados = 0;
@@ -405,6 +451,7 @@ app.post('/send', upload.single('media'), async (req, res) => {
 
             const numero = String(destino || '').trim();
             const chatId = await resolveNumberChatId(numero);
+            logErrorDetalhado('DIAG numero', `numero=${numero} chatIdResolvido=${chatId || 'NULL'}`);
 
             if (!chatId) {
                 enviados++;
@@ -833,6 +880,33 @@ app.post('/group-manage', async (req, res) => {
     } catch (err) {
         logErrorDetalhado('POST /group-manage', err);
         res.status(500).json({ erro: err.toString() });
+    }
+});
+
+// Diagnóstico: acesse http://localhost:1414/diag no navegador (ou via console:
+// fetch('/diag').then(r=>r.text()).then(console.log)) para ver o log de envios,
+// resolução de números (@lid -> @c.us), ack das mensagens, etc.
+app.get('/diag', (req, res) => {
+    try {
+        const logPath = path.join(dataDir, 'erro-detalhado.log');
+        const conteudo = fs.existsSync(logPath)
+            ? fs.readFileSync(logPath, 'utf8')
+            : '(sem registros ainda — envie algo para gerar diagnóstico)';
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(conteudo);
+    } catch (err) {
+        res.status(500).send(String(err));
+    }
+});
+
+// Limpa o log de diagnóstico (GET /diag/limpar)
+app.get('/diag/limpar', (req, res) => {
+    try {
+        fs.writeFileSync(path.join(dataDir, 'erro-detalhado.log'), '');
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send('log de diagnóstico limpo');
+    } catch (err) {
+        res.status(500).send(String(err));
     }
 });
 
