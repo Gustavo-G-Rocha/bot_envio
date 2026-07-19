@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "electron .",
-    "build": "electron-builder --win nsis"
+    "prepare-chromium": "node scripts/prepare-chromium.js",
+    "build": "node scripts/prepare-chromium.js && electron-builder --win nsis"
   },
   "keywords": [],
   "author": "",

@@ -91,6 +91,15 @@ function getChromiumPath() {
     }
 }
 
+function logErrorDetalhado(contexto, err) {
+    try {
+        const linha = `[${new Date().toISOString()}] ${contexto}: ${err && err.stack ? err.stack : err}\n`;
+        fs.appendFileSync(path.join(__dirname, 'erro-detalhado.log'), linha);
+    } catch {
+        // ignora falha ao gravar log
+    }
+}
+
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
 
 const app = express();
@@ -171,6 +180,10 @@ function extractParticipantNumber(participant) {
 // Cliente WhatsApp
 const client = new Client({
     authStrategy: new LocalAuth(), // salva sessão
+    webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1043293986-alpha.html',
+    },
     puppeteer: {
         headless: true, // roda sem abrir tela
         args: [
@@ -216,6 +229,25 @@ client.on('disconnected', () => {
 
 client.initialize();
 
+// Busca os chats um a um, ignorando qualquer conversa que a lib não
+// consiga serializar (ex: Meta AI, canais e comunidades novas) em vez de
+// derrubar a lista inteira como o client.getChats() original faz com Promise.all.
+async function getChatsResilientes() {
+    return await client.pupPage.evaluate(async () => {
+        const chatModels = window.require('WAWebCollections').Chat.getModelsArray();
+        const resultados = [];
+        for (const chat of chatModels) {
+            try {
+                const model = await window.WWebJS.getChatModel(chat);
+                resultados.push(model);
+            } catch (e) {
+                // ignora conversas que a lib não sabe processar
+            }
+        }
+        return resultados;
+    });
+}
+
 // Status endpoint
 app.get('/status', (req, res) => {
     res.json({ connected: isConnected, qr: currentQR, syncing: isSyncing });
@@ -224,10 +256,11 @@ app.get('/status', (req, res) => {
 // Listar todos os grupos
 app.get('/groups', async (req, res) => {
     try {
-        const chats = await client.getChats();
+        const chats = await getChatsResilientes();
         const grupos = chats.filter(c => c.isGroup).map(c => c.name).sort();
         res.json({ grupos });
     } catch (err) {
+        logErrorDetalhado('GET /groups', err);
         res.status(500).json({ erro: err.toString() });
     }
 });
@@ -243,7 +276,7 @@ app.post('/extract-members', async (req, res) => {
     }
 
     try {
-        const chats = await client.getChats();
+        const chats = await getChatsResilientes();
         const numeros = new Set();
 
         for (const nomeGrupo of grupos) {
@@ -276,6 +309,7 @@ app.post('/extract-members', async (req, res) => {
         res.setHeader('Content-Disposition', 'attachment; filename="numeros_membros.txt"');
         res.send(conteudo);
     } catch (err) {
+        logErrorDetalhado('POST /extract-members', err);
         res.status(500).json({ erro: err.toString() });
     }
 });
@@ -305,7 +339,7 @@ app.post('/send', upload.single('media'), async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
 
     try {
-        const chats = await client.getChats();
+        const chats = await getChatsResilientes();
         const total = destinos.length;
         let enviados = 0;
 
@@ -364,6 +398,7 @@ app.post('/send', upload.single('media'), async (req, res) => {
         res.end();
 
     } catch (err) {
+        logErrorDetalhado('POST /send', err);
         res.write(`data: ${JSON.stringify({ error: err.toString() })}\n\n`);
         res.end();
     } finally {
@@ -415,6 +450,7 @@ app.post('/logout', async (req, res) => {
         
         res.json({ sucesso: true });
     } catch (err) {
+        logErrorDetalhado('POST /logout', err);
         res.status(500).json({ erro: err.toString() });
     }
 });
