@@ -29,10 +29,22 @@
   nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -File $\"$TEMP\bot_setup_firewall.ps1$\""
   Delete "$TEMP\bot_setup_firewall.ps1"
   DetailPrint "Permissoes de rede configuradas com sucesso!"
+
+  ; Cria a pasta de dados (sessao do WhatsApp, uploads, logs) JUNTO ao programa
+  ; e libera escrita para o grupo Usuarios (SID *S-1-5-32-545, independente de
+  ; idioma), para que o app rode sem admin mesmo instalado em Program Files.
+  DetailPrint "Preparando pasta de dados gravavel..."
+  CreateDirectory "$INSTDIR\dados"
+  nsExec::ExecToLog 'icacls "$INSTDIR\dados" /grant *S-1-5-32-545:(OI)(CI)F /T'
+  DetailPrint "Pasta de dados pronta."
 !macroend
 
 !macro customUnInstall
   DetailPrint "Removendo regras de firewall do Bot Envio WhatsApp..."
   nsExec::ExecToLog "netsh advfirewall firewall delete rule name=$\"Bot Envio WhatsApp - Chromium$\""
   DetailPrint "Regras de firewall removidas."
+
+  ; Apaga a pasta de dados (sessao/login do WhatsApp, uploads, logs) ao desinstalar.
+  DetailPrint "Removendo dados e login do WhatsApp..."
+  RMDir /r "$INSTDIR\dados"
 !macroend

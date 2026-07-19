@@ -65,14 +65,35 @@ function createWindow() {
     });
 }
 
+// Resolve a pasta de dados de runtime (sessão do WhatsApp, uploads, logs).
+// Preferência: uma pasta 'dados' JUNTO ao programa (fácil de achar e some ao
+// desinstalar). O instalador libera escrita nessa pasta via icacls. Se não for
+// gravável (ex: Program Files sem a liberação), cai para o userData do sistema.
+function resolverDataDir() {
+    // No portable, PORTABLE_EXECUTABLE_DIR é a pasta onde o .exe realmente está.
+    const base = process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(app.getPath('exe'));
+    const candidato = path.join(base, 'dados');
+    try {
+        fs.mkdirSync(candidato, { recursive: true });
+        const teste = path.join(candidato, '.write-test');
+        fs.writeFileSync(teste, 'ok');
+        fs.unlinkSync(teste);
+        log('Pasta de dados (junto ao programa):', candidato);
+        return candidato;
+    } catch (e) {
+        const fallback = app.getPath('userData');
+        log('Pasta junto ao programa nao gravavel, usando userData:', fallback, '-', e.message);
+        return fallback;
+    }
+}
+
 function startServer() {
     log('=== INICIANDO SERVIDOR EXPRESS ===');
     log('Diretorio:', __dirname);
-    
+
     // Informa ao index.js uma pasta gravavel para dados de runtime (uploads,
-    // sessao, logs). Sem isso, ao rodar instalado em C:\Program Files (somente
-    // leitura) o servidor falha com EPERM ao criar 'uploads'.
-    process.env.USER_DATA_DIR = app.getPath('userData');
+    // sessao, logs). Fica junto ao programa quando possível.
+    process.env.USER_DATA_DIR = resolverDataDir();
 
     // Carregar o servidor Express diretamente no processo principal
     try {
